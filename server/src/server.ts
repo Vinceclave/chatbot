@@ -27,6 +27,9 @@ interface WebhookQuery {
 interface Message {
   text?: string;
   attachments?: any[];
+  quick_reply?: {
+    payload: string;
+  };
 }
 
 interface LocationPayload {
@@ -251,7 +254,10 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
   await sendTypingIndicator(senderId, true);
 
   const text = msg.text?.trim() || "";
+  const quickReplyPayload = msg.quick_reply?.payload;
   const currentState = getState(senderId);
+
+  console.log(`📨 Message from ${senderId}: text="${text}", payload="${quickReplyPayload}", state="${currentState?.state}"`);
 
   // ===== HANDLE ATTACHMENTS =====
   
@@ -338,10 +344,22 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
   // STATE: Awaiting required assistance type
   if (currentState.state === "awaiting_assistance_type") {
     const cleanText = text.toLowerCase().replace(/[^\w\s]/gi, '').trim();
-    const validTypes = ["food", "water", "medical", "shelter", "clothing", "other"];
+    const payload = quickReplyPayload?.toUpperCase();
+    const validTypes = ["FOOD", "WATER", "MEDICAL", "SHELTER", "CLOTHING", "OTHER"];
     
-    if (validTypes.includes(cleanText)) {
-      const capitalizedType = cleanText.charAt(0).toUpperCase() + cleanText.slice(1);
+    let selectedType = null;
+    
+    // Check quick reply payload first
+    if (payload && validTypes.includes(payload)) {
+      selectedType = payload;
+    } 
+    // Then check text input
+    else if (validTypes.includes(cleanText.toUpperCase())) {
+      selectedType = cleanText.toUpperCase();
+    }
+    
+    if (selectedType) {
+      const capitalizedType = selectedType.charAt(0).toUpperCase() + selectedType.slice(1).toLowerCase();
       addAssistanceType(senderId, capitalizedType);
       
       setState(senderId, "awaiting_more_assistance");
@@ -354,14 +372,19 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
   }
 
   // STATE: Awaiting more assistance (YES/NO)
+  // THIS IS THE KEY FIX - Check quick_reply payload first!
   if (currentState.state === "awaiting_more_assistance") {
     const cleanText = text.toLowerCase().trim();
+    const payload = quickReplyPayload?.toUpperCase();
     
-    if (cleanText === "yes" || cleanText === "y") {
+    console.log(`🔍 More assistance check: text="${cleanText}", payload="${payload}"`);
+    
+    // Check payload first (from quick reply buttons)
+    if (payload === "YES" || cleanText === "yes" || cleanText === "y") {
       setState(senderId, "awaiting_assistance_type");
       await sendTypingIndicator(senderId, false);
       return sendAssistanceTypeOptions(senderId, true);
-    } else if (cleanText === "no" || cleanText === "n") {
+    } else if (payload === "NO" || cleanText === "no" || cleanText === "n") {
       setState(senderId, "awaiting_contact_name");
       await sendTypingIndicator(senderId, false);
       const assistanceList = currentState.emergencyData.requiredAssistance || [];
@@ -428,11 +451,20 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
   // STATE: Awaiting urgency level
   if (currentState.state === "awaiting_urgency_level") {
     const cleanText = text.toLowerCase().replace(/[^\w\s]/gi, '').trim();
-    const validLevels = ["low", "medium", "high", "critical"];
+    const payload = quickReplyPayload?.toUpperCase();
+    const validLevels = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
     
-    if (validLevels.includes(cleanText)) {
+    let selectedLevel = null;
+    
+    if (payload && validLevels.includes(payload)) {
+      selectedLevel = payload;
+    } else if (validLevels.includes(cleanText.toUpperCase())) {
+      selectedLevel = cleanText.toUpperCase();
+    }
+    
+    if (selectedLevel) {
       updateEmergencyData(senderId, { 
-        urgencyLevel: cleanText.charAt(0).toUpperCase() + cleanText.slice(1) 
+        urgencyLevel: selectedLevel.charAt(0).toUpperCase() + selectedLevel.slice(1).toLowerCase()
       });
       setState(senderId, "awaiting_location");
       await sendTypingIndicator(senderId, false);
