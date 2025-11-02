@@ -17,7 +17,7 @@ const PORT: number = parseInt(process.env.PORT || "3000");
 
 // ===== ROUTES =====
 app.get('/', (req, res) => {
-  res.json({ status: "ok", service: "Location Only Bot" });
+  res.json({ status: "ok", service: "Location Lite + Map Bot" });
 });
 
 app.get('/webhook', (req: Request<{}, {}, {}, any>, res: Response) => {
@@ -48,16 +48,35 @@ app.post('/webhook', async (req: Request<{}, {}, any>, res: Response) => {
           const attachment = event.message.attachments[0];
           if (attachment.type === "location") {
             const loc = attachment.payload.coordinates;
-            await callSendAPI(senderId, {
-              text: `📍 Location received!\nLatitude: ${loc.lat}\nLongitude: ${loc.long}`
-            });
             console.log(`User ${senderId} location:`, loc);
+            await sendLocationConfirmation(senderId, loc.lat, loc.long);
             continue;
           }
         }
 
-        // Ask user to share location if they send any other message
-        await askForLocation(senderId);
+        // Handle text input for location (Messenger Lite / fallback)
+        if (event.message?.text) {
+          const text = event.message.text.trim();
+          // Basic coordinate detection: "lat, long"
+          const match = text.match(/(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+          if (match) {
+            const lat = parseFloat(match[1]);
+            const long = parseFloat(match[3]);
+            console.log(`User ${senderId} text location:`, { lat, long });
+            await sendLocationConfirmation(senderId, lat, long);
+          } else {
+            // Ask user to input coordinates
+            await callSendAPI(senderId, {
+              text: "📍 Please send your location as text in this format:\n`latitude, longitude`\n\nExample: `14.5995, 120.9842`"
+            });
+          }
+          continue;
+        }
+
+        // If user sends anything else (no attachment, no text)
+        await callSendAPI(senderId, {
+          text: "📍 Please share your location by sending coordinates (e.g., `14.5995, 120.9842`) or using Messenger location."
+        });
       }
     }
     res.status(200).send("EVENT_RECEIVED");
@@ -66,19 +85,37 @@ app.post('/webhook', async (req: Request<{}, {}, any>, res: Response) => {
   }
 });
 
-// ===== ASK FOR LOCATION =====
-async function askForLocation(senderId: string) {
+// ===== SEND CONFIRMATION & MAP BUTTON =====
+async function sendLocationConfirmation(senderId: string, lat: number, long: number) {
   await callSendAPI(senderId, {
-    text: "📍 Please share your location:",
-    quick_replies: [
-      { content_type: "location" }, // Messenger opens location picker
-      { content_type: "text", title: "Cancel", payload: "CANCEL" }
-    ]
+    text: `📍 Location received!\nLatitude: ${lat}\nLongitude: ${long}`
+  });
+
+  await callSendAPI(senderId, {
+    attachment: {
+      type: "template",
+      payload: {
+        template_type: "generic",
+        elements: [
+          {
+            title: "View Location on Map",
+            subtitle: "Tap to open in Google Maps",
+            buttons: [
+              {
+                type: "web_url",
+                url: `https://www.google.com/maps?q=${lat},${long}`,
+                title: "📍 View +"
+              }
+            ]
+          }
+        ]
+      }
+    }
   });
 }
 
 // ===== SEND TO FACEBOOK =====
-async function callSendAPI(senderId: string, message: { text: string; quick_replies?: any[] }) {
+async function callSendAPI(senderId: string, message: { text?: string; attachment?: any }) {
   try {
     await axios.post(
       `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
@@ -91,7 +128,7 @@ async function callSendAPI(senderId: string, message: { text: string; quick_repl
 
 // ===== START SERVER =====
 app.listen(PORT, () => {
-  console.log(`✅ Location Only Bot running on port ${PORT}`);
+  console.log(`✅ Location Lite + Map Bot running on port ${PORT}`);
   console.log(`🔗 Webhook URL: https://YOUR-DOMAIN.com/webhook`);
   console.log(`🔑 Verify Token: ${VERIFY_TOKEN}`);
 });
