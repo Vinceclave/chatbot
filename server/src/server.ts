@@ -84,7 +84,7 @@ interface EmergencyRequest {
   contactNumber?: string;
   
   // Emergency Details
-  requiredAssistance?: string; // Food, Water, Medical, Shelter, Clothing, Other
+  requiredAssistance?: string[]; // Array: Food, Water, Medical, Shelter, Clothing, Other
   numberOfPeople?: number;
   urgencyLevel?: string; // Low, Medium, High, Critical
   
@@ -101,6 +101,8 @@ interface UserState {
   state: 
     | "start"
     | "awaiting_assistance_type"
+    | "awaiting_assistance_confirmation"
+    | "awaiting_more_assistance"
     | "awaiting_contact_name"
     | "awaiting_contact_number"
     | "awaiting_number_of_people"
@@ -139,7 +141,7 @@ function setState(senderId: string, state: UserState['state']) {
   if (!userState[senderId]) {
     userState[senderId] = {
       state,
-      emergencyData: { timestamp: Date.now() },
+      emergencyData: { timestamp: Date.now(), requiredAssistance: [] },
       timestamp: Date.now()
     };
   } else {
@@ -162,6 +164,16 @@ function updateEmergencyData(senderId: string, data: Partial<EmergencyRequest>) 
       ...userState[senderId].emergencyData,
       ...data
     };
+  }
+}
+
+function addAssistanceType(senderId: string, type: string) {
+  if (userState[senderId]) {
+    const current = userState[senderId].emergencyData.requiredAssistance || [];
+    if (!current.includes(type)) {
+      current.push(type);
+      userState[senderId].emergencyData.requiredAssistance = current;
+    }
   }
 }
 
@@ -325,24 +337,42 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
 
   // STATE: Awaiting required assistance type
   if (currentState.state === "awaiting_assistance_type") {
-    // Remove emojis and extra spaces to get clean text
     const cleanText = text.toLowerCase().replace(/[^\w\s]/gi, '').trim();
     const validTypes = ["food", "water", "medical", "shelter", "clothing", "other"];
     
     if (validTypes.includes(cleanText)) {
-      updateEmergencyData(senderId, { 
-        requiredAssistance: cleanText.charAt(0).toUpperCase() + cleanText.slice(1) 
-      });
+      const capitalizedType = cleanText.charAt(0).toUpperCase() + cleanText.slice(1);
+      addAssistanceType(senderId, capitalizedType);
+      
+      setState(senderId, "awaiting_more_assistance");
+      await sendTypingIndicator(senderId, false);
+      return askForMoreAssistance(senderId);
+    } else {
+      await sendTypingIndicator(senderId, false);
+      return sendAssistanceTypeOptions(senderId);
+    }
+  }
+
+  // STATE: Awaiting more assistance (YES/NO)
+  if (currentState.state === "awaiting_more_assistance") {
+    const cleanText = text.toLowerCase().trim();
+    
+    if (cleanText === "yes" || cleanText === "y") {
+      setState(senderId, "awaiting_assistance_type");
+      await sendTypingIndicator(senderId, false);
+      return sendAssistanceTypeOptions(senderId, true);
+    } else if (cleanText === "no" || cleanText === "n") {
       setState(senderId, "awaiting_contact_name");
       await sendTypingIndicator(senderId, false);
+      const assistanceList = currentState.emergencyData.requiredAssistance || [];
       return callSendAPI(senderId, {
-        text: `✅ Required Assistance: **${cleanText.toUpperCase()}**\n\n` +
+        text: `✅ Selected Assistance: **${assistanceList.join(", ")}**\n\n` +
               `👤 **Contact Name**\n` +
               `Please provide your full name:`
       });
     } else {
       await sendTypingIndicator(senderId, false);
-      return sendAssistanceTypeOptions(senderId);
+      return askForMoreAssistance(senderId);
     }
   }
 
@@ -397,7 +427,6 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
 
   // STATE: Awaiting urgency level
   if (currentState.state === "awaiting_urgency_level") {
-    // Remove emojis and extra spaces to get clean text
     const cleanText = text.toLowerCase().replace(/[^\w\s]/gi, '').trim();
     const validLevels = ["low", "medium", "high", "critical"];
     
@@ -471,9 +500,18 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
 }
 
 // ===== Quick Reply Options =====
-function sendAssistanceTypeOptions(senderId: string) {
+function sendAssistanceTypeOptions(senderId: string, isAdditional: boolean = false) {
+  const currentState = getState(senderId);
+  const selectedTypes = currentState?.emergencyData.requiredAssistance || [];
+  
+  let headerText = "🆘 **What type of assistance do you need?**\n\n";
+  if (isAdditional && selectedTypes.length > 0) {
+    headerText = `✅ Currently selected: **${selectedTypes.join(", ")}**\n\n` +
+                 `🆘 **What additional assistance do you need?**\n\n`;
+  }
+  
   return callSendAPI(senderId, {
-    text: "🆘 **What type of assistance do you need?**\n\nPlease select:",
+    text: headerText + "Please select:",
     quick_replies: [
       { content_type: "text", title: "🍚 Food", payload: "FOOD" },
       { content_type: "text", title: "💧 Water", payload: "WATER" },
@@ -481,6 +519,21 @@ function sendAssistanceTypeOptions(senderId: string) {
       { content_type: "text", title: "🏠 Shelter", payload: "SHELTER" },
       { content_type: "text", title: "👕 Clothing", payload: "CLOTHING" },
       { content_type: "text", title: "📦 Other", payload: "OTHER" }
+    ]
+  });
+}
+
+function askForMoreAssistance(senderId: string) {
+  const currentState = getState(senderId);
+  const selectedTypes = currentState?.emergencyData.requiredAssistance || [];
+  
+  return callSendAPI(senderId, {
+    text: `✅ Added: **${selectedTypes[selectedTypes.length - 1]}**\n\n` +
+          `Current selections: **${selectedTypes.join(", ")}**\n\n` +
+          `❓ **Do you need any other type of assistance?**`,
+    quick_replies: [
+      { content_type: "text", title: "✅ Yes", payload: "YES" },
+      { content_type: "text", title: "❌ No", payload: "NO" }
     ]
   });
 }
@@ -497,21 +550,24 @@ function sendUrgencyLevelOptions(senderId: string) {
   });
 }
 
-// ===== UPDATED LOCATION FUNCTION WITH QUICK REPLY =====
 function askForLocation(senderId: string) {
+  // Use a button template with location sharing
   return callSendAPI(senderId, {
-    text: `📍 **Share Your Location**\n\n` +
-          `Please tap the location button below, or type your full address:`,
-    quick_replies: [
-      { 
-        content_type: "location" // Native location picker
-      },
-      { 
-        content_type: "text", 
-        title: "✍️ Type Address", 
-        payload: "TYPE_ADDRESS" 
+    attachment: {
+      type: "template",
+      payload: {
+        template_type: "generic",
+        elements: [{
+          title: "📍 Share Your Location",
+          subtitle: "Tap the button below to share your current location, or simply type your address.",
+          buttons: [
+            {
+              type: "element_share"
+            }
+          ]
+        }]
       }
-    ]
+    }
   });
 }
 
@@ -537,7 +593,7 @@ async function submitEmergencyRequest(senderId: string) {
   return callSendAPI(senderId, {
     text: `✅ **EMERGENCY REQUEST SUBMITTED**\n\n` +
           `**Summary:**\n` +
-          `• Assistance Needed: ${data.requiredAssistance || 'N/A'}\n` +
+          `• Assistance Needed: ${data.requiredAssistance?.join(", ") || 'N/A'}\n` +
           `• Contact: ${data.contactName || 'N/A'}\n` +
           `• Phone: ${data.contactNumber || 'N/A'}\n` +
           `• People: ${data.numberOfPeople || 'N/A'}\n` +
