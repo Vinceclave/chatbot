@@ -261,7 +261,7 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
               `Latitude: ${loc.coordinates.lat}\n` +
               `Longitude: ${loc.coordinates.long}\n\n` +
               `📄 **Verification Document** (Optional)\n` +
-              `Please upload any document that verifies your emergency situation (PDF, JPG, PNG).\n\n` +
+              `Please upload any document that verifies your emergency situation (image).\n\n` +
               `Or type **SKIP** to continue without a document.`
       });
     }
@@ -497,14 +497,21 @@ function sendUrgencyLevelOptions(senderId: string) {
   });
 }
 
+// ===== UPDATED LOCATION FUNCTION WITH QUICK REPLY =====
 function askForLocation(senderId: string) {
   return callSendAPI(senderId, {
     text: `📍 **Share Your Location**\n\n` +
-          `Please provide your location:\n\n` +
-          `1️⃣ Tap the "+" button in Messenger\n` +
-          `2️⃣ Select "Location" 📍\n` +
-          `3️⃣ Send your current location\n\n` +
-          `💡 Or simply type your full address.`
+          `Please tap the location button below, or type your full address:`,
+    quick_replies: [
+      { 
+        content_type: "location" // Native location picker
+      },
+      { 
+        content_type: "text", 
+        title: "✍️ Type Address", 
+        payload: "TYPE_ADDRESS" 
+      }
+    ]
   });
 }
 
