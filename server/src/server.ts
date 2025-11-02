@@ -4,9 +4,14 @@ import bodyParser from 'body-parser';
 const app = express();
 app.use(bodyParser.json());
 
-// Configuration - CHANGE THESE!
-const VERIFY_TOKEN: string = "my_super_secret_verify_token_12345"; // Choose any random string
-const PAGE_ACCESS_TOKEN: string = "YOUR_PAGE_ACCESS_TOKEN_HERE"; // You'll get this from Facebook later
+// Configuration - IMPORTANT: Update these values!
+// 1. VERIFY_TOKEN: Use this EXACT value when setting up Facebook webhook
+const VERIFY_TOKEN: string = "messenger_bot_verify_token_2025_secure";
+
+// 2. PAGE_ACCESS_TOKEN: Get this from Facebook Developer Console
+//    Steps: Developer Console > Your App > Messenger > Settings > Access Tokens
+const PAGE_ACCESS_TOKEN: string = process.env.PAGE_ACCESS_TOKEN || "YOUR_PAGE_ACCESS_TOKEN_HERE";
+
 const PORT: number = parseInt(process.env.PORT || "3000");
 
 // Types
@@ -68,16 +73,20 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 // Webhook verification endpoint (GET)
+// Facebook will call this to verify your webhook
 app.get('/webhook', (req: Request<{}, {}, {}, WebhookQuery>, res: Response) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
   
+  console.log('🔍 Webhook verification attempt:', { mode, token, challenge });
+  
   if (mode && token === VERIFY_TOKEN) {
     console.log('✅ WEBHOOK_VERIFIED');
     res.status(200).send(challenge);
   } else {
-    console.log('❌ Verification failed');
+    console.log('❌ Verification failed - Token mismatch');
+    console.log(`Expected: "${VERIFY_TOKEN}", Received: "${token}"`);
     res.sendStatus(403);
   }
 });
@@ -221,5 +230,7 @@ async function callSendAPI(senderPsid: string, response: MessageResponse): Promi
 // Start the server
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
-  console.log(`📍 Webhook URL: https://your-app-name.onrender.com/webhook`);
+  console.log(`📍 Webhook URL should be: https://your-app-name.onrender.com/webhook`);
+  console.log(`🔑 Verify Token: ${VERIFY_TOKEN}`);
+  console.log(`⚠️  Make sure to use this EXACT verify token in Facebook Developer Console`);
 });
