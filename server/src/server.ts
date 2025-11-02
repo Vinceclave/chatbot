@@ -64,6 +64,7 @@ interface WebhookBody {
 interface MessageResponse {
   text?: string;
   quick_replies?: any[];
+  attachment?: any;
 }
 
 interface SendAPIBody {
@@ -244,6 +245,22 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
     return askForLocation(senderId, text);
   }
 
+  // Awaiting location but got text (user typed address)
+  if (currentState && currentState.state === "awaiting_location") {
+    const helpType = currentState?.helpType || "general";
+    clearState(senderId);
+    
+    await sendTypingIndicator(senderId, false);
+    return callSendAPI(senderId, {
+      text: `📍 **Address Received!**\n` +
+            `Location: ${msg.text}\n\n` +
+            `🚨 Help Type: ${helpType.toUpperCase()}\n` +
+            `✅ Emergency response team has been notified!\n` +
+            `⏱️ Expected arrival: 15-30 minutes\n\n` +
+            `Stay safe. Help is on the way!`
+    });
+  }
+
   // Greetings
   if (text.includes("hi") || text.includes("hello") || text.includes("hey") || text.includes("start")) {
     await sendTypingIndicator(senderId, false);
@@ -305,11 +322,15 @@ function sendHelpOptions(senderId: string) {
 function askForLocation(senderId: string, helpType?: string) {
   const helpText = helpType ? ` for **${helpType.toUpperCase()}** assistance` : "";
   
+  // Method 1: Instructions for manual location sharing
   return callSendAPI(senderId, {
     text: `📍 **Share Your Location**\n\n` +
-          `To dispatch emergency help${helpText}, please tap the button below to share your current location.\n\n` +
-          `🔒 Your location is only used for emergency response.`,
-    quick_replies: [{ content_type: "location" }]
+          `To dispatch emergency help${helpText}, please:\n\n` +
+          `1️⃣ Tap the "+" button in Messenger\n` +
+          `2️⃣ Select "Location" 📍\n` +
+          `3️⃣ Send your current location\n\n` +
+          `🔒 Your location is only used for emergency response.\n\n` +
+          `💡 Or simply type your address if you can't share location.`
   });
 }
 
@@ -381,7 +402,7 @@ async function callSendAPI(senderId: string, response: MessageResponse): Promise
 
     // Success
     const data = await res.json();
-    console.log(`✅ Message sent to ${senderId}:`, data);
+    console.log(`✅ Message sent to ${senderId}`);
   } catch (error) {
     console.error("❌ Failed to send message:", error);
     throw error; // Re-throw for error handling in caller
