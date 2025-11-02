@@ -73,7 +73,7 @@ interface SendAPIBody {
   sender_action?: string;
 }
 
-// ===== Emergency Relief Request Data Structure =====
+// ===== Emergency Request Data Structure =====
 interface EmergencyRequest {
   // Location
   location?: string;
@@ -95,13 +95,13 @@ interface EmergencyRequest {
   additionalInfo?: string;
   
   timestamp: number;
+  submittedAt?: number;
 }
 
 interface UserState {
   state: 
     | "start"
     | "awaiting_assistance_type"
-    | "awaiting_assistance_confirmation"
     | "awaiting_more_assistance"
     | "awaiting_contact_name"
     | "awaiting_contact_number"
@@ -183,7 +183,7 @@ function addAssistanceType(senderId: string, type: string) {
 app.get('/', (req, res) => {
   res.json({
     status: "ok",
-    service: "AidVocate Emergency Relief Bot",
+    service: "AidVocate Emergency Bot",
     uptime: process.uptime(),
     activeRequests: Object.keys(userState).length
   });
@@ -269,12 +269,12 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
       setState(senderId, "awaiting_verification_doc");
       await sendTypingIndicator(senderId, false);
       return callSendAPI(senderId, {
-        text: `📍 **Location Received!**\n` +
+        text: `📍 Location Received!\n` +
               `Latitude: ${loc.coordinates.lat}\n` +
               `Longitude: ${loc.coordinates.long}\n\n` +
-              `📄 **Verification Document** (Optional)\n` +
+              `📄 Verification Document (Optional)\n` +
               `Please upload any document that verifies your emergency situation (image).\n\n` +
-              `Or type **SKIP** to continue without a document.`
+              `Or type SKIP to continue without a document.`
       });
     }
     
@@ -287,15 +287,15 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
         setState(senderId, "awaiting_additional_info");
         await sendTypingIndicator(senderId, false);
         return callSendAPI(senderId, {
-          text: `✅ **Verification document received!**\n\n` +
-                `📝 **Additional Information** (Optional)\n` +
+          text: `✅ Verification document received!\n\n` +
+                `📝 Additional Information (Optional)\n` +
                 `Please share any special needs, medical conditions, accessibility requirements, etc.\n\n` +
-                `Or type **SKIP** to submit your request.`
+                `Or type SKIP to submit your request.`
         });
       } else {
         await sendTypingIndicator(senderId, false);
         return callSendAPI(senderId, {
-          text: `📷 Image received! Type **HELP** to start an emergency request.`
+          text: `📷 Image received! Type HELP to start an emergency request.`
         });
       }
     }
@@ -318,7 +318,7 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
     clearState(senderId);
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
-      text: `🔄 Request cancelled. Type **HELP** when you need assistance.`
+      text: `🔄 Request cancelled. Type HELP when you need assistance.`
     });
   }
 
@@ -328,9 +328,9 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
     // No active request - show welcome
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
-      text: `👋 **Welcome to AidVocate Emergency Relief**\n\n` +
+      text: `👋 Welcome to AidVocate Emergency Bot\n\n` +
             `I help you submit emergency assistance requests.\n\n` +
-            `🆘 Type **HELP** to start a new request.\n\n` +
+            `🆘 Type HELP to start a new request.\n\n` +
             `We're here 24/7 to assist you! 🙏`
     });
   }
@@ -366,8 +366,8 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
       await sendTypingIndicator(senderId, false);
       const assistanceList = currentState.emergencyData.requiredAssistance || [];
       return callSendAPI(senderId, {
-        text: `✅ Selected Assistance: **${assistanceList.join(", ")}**\n\n` +
-              `👤 **Contact Name**\n` +
+        text: `✅ Selected Assistance: ${assistanceList.join(", ")}\n\n` +
+              `👤 Contact Name\n` +
               `Please provide your full name:`
       });
     } else {
@@ -382,8 +382,8 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
     setState(senderId, "awaiting_contact_number");
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
-      text: `✅ Name: **${text}**\n\n` +
-            `📱 **Contact Number**\n` +
+      text: `✅ Name: ${text}\n\n` +
+            `📱 Contact Number\n` +
             `Please provide your phone number:`
     });
   }
@@ -403,8 +403,8 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
     setState(senderId, "awaiting_number_of_people");
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
-      text: `✅ Contact Number: **${text}**\n\n` +
-            `👥 **Number of People**\n` +
+      text: `✅ Contact Number: ${text}\n\n` +
+            `👥 Number of People\n` +
             `How many people need assistance? (Enter a number):`
     });
   }
@@ -449,11 +449,11 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
     setState(senderId, "awaiting_verification_doc");
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
-      text: `📍 **Location Received!**\n` +
+      text: `📍 Location Received!\n` +
             `Address: ${text}\n\n` +
-            `📄 **Verification Document** (Optional)\n` +
+            `📄 Verification Document (Optional)\n` +
             `Please upload any document that verifies your emergency situation (image).\n\n` +
-            `Or type **SKIP** to continue without a document.`
+            `Or type SKIP to continue without a document.`
     });
   }
 
@@ -463,15 +463,15 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
       setState(senderId, "awaiting_additional_info");
       await sendTypingIndicator(senderId, false);
       return callSendAPI(senderId, {
-        text: `⏭️ **Skipped verification document**\n\n` +
-              `📝 **Additional Information** (Optional)\n` +
+        text: `⏭️ Skipped verification document\n\n` +
+              `📝 Additional Information (Optional)\n` +
               `Please share any special needs, medical conditions, accessibility requirements, etc.\n\n` +
-              `Or type **DONE** to submit your request.`
+              `Or type DONE to submit your request.`
       });
     } else {
       await sendTypingIndicator(senderId, false);
       return callSendAPI(senderId, {
-        text: `Please upload an image as verification, or type **SKIP** to continue.`
+        text: `Please upload an image as verification, or type SKIP to continue.`
       });
     }
   }
@@ -487,15 +487,15 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
     updateEmergencyData(senderId, { additionalInfo: text });
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
-      text: `✅ **Additional information received!**\n\n` +
-            `Type **DONE** to submit your emergency request.`
+      text: `✅ Additional information received!\n\n` +
+            `Type DONE to submit your emergency request.`
     });
   }
 
   // Default fallback
   await sendTypingIndicator(senderId, false);
   return callSendAPI(senderId, {
-    text: `I didn't understand that. Type **HELP** to start a new emergency request.`
+    text: `I didn't understand that. Type HELP to start a new emergency request.`
   });
 }
 
@@ -504,10 +504,10 @@ function sendAssistanceTypeOptions(senderId: string, isAdditional: boolean = fal
   const currentState = getState(senderId);
   const selectedTypes = currentState?.emergencyData.requiredAssistance || [];
   
-  let headerText = "🆘 **What type of assistance do you need?**\n\n";
+  let headerText = "🆘 What type of assistance do you need?\n\n";
   if (isAdditional && selectedTypes.length > 0) {
-    headerText = `✅ Currently selected: **${selectedTypes.join(", ")}**\n\n` +
-                 `🆘 **What additional assistance do you need?**\n\n`;
+    headerText = `✅ Currently selected: ${selectedTypes.join(", ")}\n\n` +
+                 `🆘 What additional assistance do you need?\n\n`;
   }
   
   return callSendAPI(senderId, {
@@ -528,9 +528,9 @@ function askForMoreAssistance(senderId: string) {
   const selectedTypes = currentState?.emergencyData.requiredAssistance || [];
   
   return callSendAPI(senderId, {
-    text: `✅ Added: **${selectedTypes[selectedTypes.length - 1]}**\n\n` +
-          `Current selections: **${selectedTypes.join(", ")}**\n\n` +
-          `❓ **Do you need any other type of assistance?**`,
+    text: `✅ Added: ${selectedTypes[selectedTypes.length - 1]}\n\n` +
+          `Current selections: ${selectedTypes.join(", ")}\n\n` +
+          `❓ Do you need any other type of assistance?`,
     quick_replies: [
       { content_type: "text", title: "✅ Yes", payload: "YES" },
       { content_type: "text", title: "❌ No", payload: "NO" }
@@ -540,7 +540,7 @@ function askForMoreAssistance(senderId: string) {
 
 function sendUrgencyLevelOptions(senderId: string) {
   return callSendAPI(senderId, {
-    text: "⚠️ **What is the urgency level?**\n\nPlease select:",
+    text: "⚠️ What is the urgency level?\n\nPlease select:",
     quick_replies: [
       { content_type: "text", title: "🟢 Low", payload: "LOW" },
       { content_type: "text", title: "🟡 Medium", payload: "MEDIUM" },
@@ -577,12 +577,44 @@ async function submitEmergencyRequest(senderId: string) {
   if (!state) return;
 
   const data = state.emergencyData;
+  data.submittedAt = Date.now();
   
   await sendTypingIndicator(senderId, true);
 
-  // Log the complete request (in production, save to database)
-  console.log("📋 EMERGENCY REQUEST SUBMITTED:");
+  // ===== LOG THE COMPLETE REQUEST =====
+  console.log("\n" + "=".repeat(80));
+  console.log("📋 EMERGENCY REQUEST SUBMITTED");
+  console.log("=".repeat(80));
+  console.log("🆔 User ID:", senderId);
+  console.log("⏰ Timestamp:", new Date(data.submittedAt).toISOString());
+  console.log("-".repeat(80));
+  console.log("📦 ASSISTANCE REQUIRED:");
+  console.log("   Types:", data.requiredAssistance?.join(", ") || 'None specified');
+  console.log("-".repeat(80));
+  console.log("👤 CONTACT INFORMATION:");
+  console.log("   Name:", data.contactName || 'N/A');
+  console.log("   Phone:", data.contactNumber || 'N/A');
+  console.log("-".repeat(80));
+  console.log("🚨 EMERGENCY DETAILS:");
+  console.log("   Number of People:", data.numberOfPeople || 'N/A');
+  console.log("   Urgency Level:", data.urgencyLevel || 'N/A');
+  console.log("-".repeat(80));
+  console.log("📍 LOCATION:");
+  console.log("   Address:", data.location || 'N/A');
+  if (data.locationCoords) {
+    console.log("   Coordinates:", `${data.locationCoords.lat}, ${data.locationCoords.long}`);
+    console.log("   Google Maps:", `https://www.google.com/maps?q=${data.locationCoords.lat},${data.locationCoords.long}`);
+  }
+  console.log("-".repeat(80));
+  console.log("📄 VERIFICATION:");
+  console.log("   Document:", data.verificationDoc || 'Not provided');
+  console.log("-".repeat(80));
+  console.log("📝 ADDITIONAL INFO:");
+  console.log("   Details:", data.additionalInfo || 'None provided');
+  console.log("-".repeat(80));
+  console.log("🔗 FULL DATA (JSON):");
   console.log(JSON.stringify(data, null, 2));
+  console.log("=".repeat(80) + "\n");
 
   // Clear user state
   clearState(senderId);
@@ -591,18 +623,18 @@ async function submitEmergencyRequest(senderId: string) {
 
   // Send confirmation
   return callSendAPI(senderId, {
-    text: `✅ **EMERGENCY REQUEST SUBMITTED**\n\n` +
-          `**Summary:**\n` +
-          `• Assistance Needed: ${data.requiredAssistance?.join(", ") || 'N/A'}\n` +
+    text: `✅ EMERGENCY REQUEST SUBMITTED\n\n` +
+          `Summary:\n` +
+          `• Assistance: ${data.requiredAssistance?.join(", ") || 'N/A'}\n` +
           `• Contact: ${data.contactName || 'N/A'}\n` +
           `• Phone: ${data.contactNumber || 'N/A'}\n` +
           `• People: ${data.numberOfPeople || 'N/A'}\n` +
           `• Urgency: ${data.urgencyLevel || 'N/A'}\n` +
           `• Location: ${data.location || 'N/A'}\n\n` +
-          `🚨 **Emergency response team has been notified!**\n` +
+          `🚨 Emergency response team has been notified!\n` +
           `⏱️ Expected response: 15-30 minutes\n\n` +
           `Stay safe! Help is on the way! 🙏\n\n` +
-          `Type **HELP** to submit another request.`
+          `Type HELP to submit another request.`
   });
 }
 
@@ -613,16 +645,16 @@ async function handlePostback(senderId: string, postback: Postback) {
   if (postback.payload === "GET_STARTED") {
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
-      text: `👋 **Welcome to AidVocate Emergency Relief!**\n\n` +
+      text: `👋 Welcome to AidVocate Emergency Bot!\n\n` +
             `Your trusted disaster assistance companion.\n\n` +
-            `🆘 Type **HELP** to submit an emergency request.\n\n` +
+            `🆘 Type HELP to submit an emergency request.\n\n` +
             `We're here 24/7 to help you stay safe! 🙏`
     });
   }
 
   await sendTypingIndicator(senderId, false);
   return callSendAPI(senderId, { 
-    text: `✅ You selected: **${postback.title || postback.payload}**\n\nType **HELP** if you need assistance.` 
+    text: `✅ You selected: ${postback.title || postback.payload}\n\nType HELP if you need assistance.` 
   });
 }
 
@@ -696,7 +728,7 @@ process.on('SIGINT', () => {
 // ===== Start Server =====
 app.listen(PORT, () => {
   console.log(`\n${"=".repeat(60)}`);
-  console.log(`✅ AidVocate Emergency Relief Bot is RUNNING`);
+  console.log(`✅ AidVocate Emergency Bot is RUNNING`);
   console.log(`${"=".repeat(60)}`);
   console.log(`📡 Port: ${PORT}`);
   console.log(`🔗 Webhook URL: https://YOUR-DOMAIN.com/webhook`);
