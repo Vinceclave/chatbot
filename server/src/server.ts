@@ -7,7 +7,6 @@ app.use(bodyParser.json());
 // ===== CONFIGURE =====
 const VERIFY_TOKEN: string = "messenger_bot_verify_token_2025_secure";
 
-// Critical: Fail fast if token is missing
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 if (!PAGE_ACCESS_TOKEN) {
   console.error("❌ PAGE_ACCESS_TOKEN environment variable is required!");
@@ -74,13 +73,46 @@ interface SendAPIBody {
   sender_action?: string;
 }
 
-interface UserState {
-  state: string;
-  helpType?: string;
+// ===== Emergency Relief Request Data Structure =====
+interface EmergencyRequest {
+  // Location
+  location?: string;
+  locationCoords?: { lat: number; long: number };
+  
+  // Contact Information
+  contactName?: string;
+  contactNumber?: string;
+  
+  // Emergency Details
+  requiredAssistance?: string; // Food, Water, Medical, Shelter, Clothing, Other
+  numberOfPeople?: number;
+  urgencyLevel?: string; // Low, Medium, High, Critical
+  
+  // Verification
+  verificationDoc?: string; // Image URL
+  
+  // Additional Information
+  additionalInfo?: string;
+  
   timestamp: number;
 }
 
-// ===== Chat State Memory (with timestamps) =====
+interface UserState {
+  state: 
+    | "start"
+    | "awaiting_assistance_type"
+    | "awaiting_contact_name"
+    | "awaiting_contact_number"
+    | "awaiting_number_of_people"
+    | "awaiting_urgency_level"
+    | "awaiting_location"
+    | "awaiting_verification_doc"
+    | "awaiting_additional_info";
+  emergencyData: EmergencyRequest;
+  timestamp: number;
+}
+
+// ===== State Memory =====
 const userState: Record<string, UserState> = {};
 
 // ===== Memory Cleanup =====
@@ -100,16 +132,20 @@ function cleanupOldStates() {
   }
 }
 
-// Run cleanup every 5 minutes
 setInterval(cleanupOldStates, CLEANUP_INTERVAL_MS);
 
 // ===== Helper Functions =====
-function setState(senderId: string, state: string, helpType?: string) {
-  userState[senderId] = {
-    state,
-    helpType,
-    timestamp: Date.now()
-  };
+function setState(senderId: string, state: UserState['state']) {
+  if (!userState[senderId]) {
+    userState[senderId] = {
+      state,
+      emergencyData: { timestamp: Date.now() },
+      timestamp: Date.now()
+    };
+  } else {
+    userState[senderId].state = state;
+    userState[senderId].timestamp = Date.now();
+  }
 }
 
 function getState(senderId: string): UserState | undefined {
@@ -120,15 +156,24 @@ function clearState(senderId: string) {
   delete userState[senderId];
 }
 
+function updateEmergencyData(senderId: string, data: Partial<EmergencyRequest>) {
+  if (userState[senderId]) {
+    userState[senderId].emergencyData = {
+      ...userState[senderId].emergencyData,
+      ...data
+    };
+  }
+}
+
 // ===== Routes =====
 
 // Health check
 app.get('/', (req, res) => {
   res.json({
     status: "ok",
-    service: "AidVocate Messenger Bot",
+    service: "AidVocate Emergency Relief Bot",
     uptime: process.uptime(),
-    activeUsers: Object.keys(userState).length
+    activeRequests: Object.keys(userState).length
   });
 });
 
@@ -152,15 +197,12 @@ app.post('/webhook', async (req: Request<{}, {}, WebhookBody>, res: Response) =>
   const body = req.body;
 
   if (body.object === 'page') {
-    // Process each entry
     for (const entry of body.entry) {
-      // Validate messaging array exists
       if (!entry.messaging || entry.messaging.length === 0) {
         console.warn("⚠️ Empty messaging array in entry");
         continue;
       }
 
-      // Process each messaging event
       for (const event of entry.messaging) {
         const senderId = event.sender?.id;
         
@@ -177,9 +219,8 @@ app.post('/webhook', async (req: Request<{}, {}, WebhookBody>, res: Response) =>
           }
         } catch (error) {
           console.error(`❌ Error processing event for user ${senderId}:`, error);
-          // Send error message to user
           await callSendAPI(senderId, {
-            text: "⚠️ Sorry, something went wrong. Please try again."
+            text: "⚠️ Sorry, something went wrong. Please type HELP to restart."
           }).catch(e => console.error("Failed to send error message:", e));
         }
       }
@@ -195,142 +236,308 @@ app.post('/webhook', async (req: Request<{}, {}, WebhookBody>, res: Response) =>
 async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
   if (!msg) return;
 
-  // Show typing indicator
   await sendTypingIndicator(senderId, true);
 
-  // ---- Location received ----
-  if (msg.attachments && msg.attachments.length > 0 && msg.attachments[0]?.type === "location") {
-    const loc = msg.attachments[0].payload as LocationPayload;
-    const currentState = getState(senderId);
-    const helpType = currentState?.helpType || "general";
-    
-    clearState(senderId);
+  const text = msg.text?.trim() || "";
+  const currentState = getState(senderId);
 
+  // ===== HANDLE ATTACHMENTS =====
+  
+  // Location attachment
+  if (msg.attachments && msg.attachments.length > 0) {
+    const attachment = msg.attachments[0];
+    
+    if (attachment.type === "location") {
+      const loc = attachment.payload as LocationPayload;
+      updateEmergencyData(senderId, {
+        locationCoords: { lat: loc.coordinates.lat, long: loc.coordinates.long },
+        location: `${loc.coordinates.lat}, ${loc.coordinates.long}`
+      });
+      
+      setState(senderId, "awaiting_verification_doc");
+      await sendTypingIndicator(senderId, false);
+      return callSendAPI(senderId, {
+        text: `📍 **Location Received!**\n` +
+              `Latitude: ${loc.coordinates.lat}\n` +
+              `Longitude: ${loc.coordinates.long}\n\n` +
+              `📄 **Verification Document** (Optional)\n` +
+              `Please upload any document that verifies your emergency situation (PDF, JPG, PNG).\n\n` +
+              `Or type **SKIP** to continue without a document.`
+      });
+    }
+    
+    // Image attachment (for verification)
+    if (attachment.type === "image") {
+      if (currentState?.state === "awaiting_verification_doc") {
+        const imageUrl = attachment.payload?.url || "Image received";
+        updateEmergencyData(senderId, { verificationDoc: imageUrl });
+        
+        setState(senderId, "awaiting_additional_info");
+        await sendTypingIndicator(senderId, false);
+        return callSendAPI(senderId, {
+          text: `✅ **Verification document received!**\n\n` +
+                `📝 **Additional Information** (Optional)\n` +
+                `Please share any special needs, medical conditions, accessibility requirements, etc.\n\n` +
+                `Or type **SKIP** to submit your request.`
+        });
+      } else {
+        await sendTypingIndicator(senderId, false);
+        return callSendAPI(senderId, {
+          text: `📷 Image received! Type **HELP** to start an emergency request.`
+        });
+      }
+    }
+  }
+
+  // ===== COMMAND HANDLERS =====
+  
+  // Help/Emergency command
+  if (text.toLowerCase().includes("help") || 
+      text.toLowerCase().includes("sos") || 
+      text.toLowerCase().includes("emergency") || 
+      text.toLowerCase().includes("start")) {
+    setState(senderId, "awaiting_assistance_type");
+    await sendTypingIndicator(senderId, false);
+    return sendAssistanceTypeOptions(senderId);
+  }
+
+  // Cancel command
+  if (text.toLowerCase().includes("cancel") || text.toLowerCase().includes("reset")) {
+    clearState(senderId);
+    await sendTypingIndicator(senderId, false);
+    return callSendAPI(senderId, {
+      text: `🔄 Request cancelled. Type **HELP** when you need assistance.`
+    });
+  }
+
+  // ===== STATE-BASED CONVERSATION FLOW =====
+
+  if (!currentState) {
+    // No active request - show welcome
+    await sendTypingIndicator(senderId, false);
+    return callSendAPI(senderId, {
+      text: `👋 **Welcome to AidVocate Emergency Relief**\n\n` +
+            `I help you submit emergency assistance requests.\n\n` +
+            `🆘 Type **HELP** to start a new request.\n\n` +
+            `We're here 24/7 to assist you! 🙏`
+    });
+  }
+
+  // STATE: Awaiting required assistance type
+  if (currentState.state === "awaiting_assistance_type") {
+    const assistanceType = text.toLowerCase();
+    const validTypes = ["food", "water", "medical", "shelter", "clothing", "other"];
+    
+    if (validTypes.includes(assistanceType)) {
+      updateEmergencyData(senderId, { 
+        requiredAssistance: assistanceType.charAt(0).toUpperCase() + assistanceType.slice(1) 
+      });
+      setState(senderId, "awaiting_contact_name");
+      await sendTypingIndicator(senderId, false);
+      return callSendAPI(senderId, {
+        text: `✅ Required Assistance: **${assistanceType.toUpperCase()}**\n\n` +
+              `👤 **Contact Name**\n` +
+              `Please provide your full name:`
+      });
+    } else {
+      await sendTypingIndicator(senderId, false);
+      return sendAssistanceTypeOptions(senderId);
+    }
+  }
+
+  // STATE: Awaiting contact name
+  if (currentState.state === "awaiting_contact_name") {
+    updateEmergencyData(senderId, { contactName: text });
+    setState(senderId, "awaiting_contact_number");
+    await sendTypingIndicator(senderId, false);
+    return callSendAPI(senderId, {
+      text: `✅ Name: **${text}**\n\n` +
+            `📱 **Contact Number**\n` +
+            `Please provide your phone number:`
+    });
+  }
+
+  // STATE: Awaiting contact number
+  if (currentState.state === "awaiting_contact_number") {
+    // Basic phone validation
+    const phoneRegex = /^[0-9+\-\s()]{7,}$/;
+    if (!phoneRegex.test(text)) {
+      await sendTypingIndicator(senderId, false);
+      return callSendAPI(senderId, {
+        text: `⚠️ Invalid phone number format.\n\nPlease enter a valid phone number (e.g., 09171234567):`
+      });
+    }
+    
+    updateEmergencyData(senderId, { contactNumber: text });
+    setState(senderId, "awaiting_number_of_people");
+    await sendTypingIndicator(senderId, false);
+    return callSendAPI(senderId, {
+      text: `✅ Contact Number: **${text}**\n\n` +
+            `👥 **Number of People**\n` +
+            `How many people need assistance? (Enter a number):`
+    });
+  }
+
+  // STATE: Awaiting number of people
+  if (currentState.state === "awaiting_number_of_people") {
+    const num = parseInt(text);
+    if (isNaN(num) || num < 1 || num > 10000) {
+      await sendTypingIndicator(senderId, false);
+      return callSendAPI(senderId, {
+        text: `⚠️ Please enter a valid number (1-10000):`
+      });
+    }
+    
+    updateEmergencyData(senderId, { numberOfPeople: num });
+    setState(senderId, "awaiting_urgency_level");
+    await sendTypingIndicator(senderId, false);
+    return sendUrgencyLevelOptions(senderId);
+  }
+
+  // STATE: Awaiting urgency level
+  if (currentState.state === "awaiting_urgency_level") {
+    const urgency = text.toLowerCase();
+    const validLevels = ["low", "medium", "high", "critical"];
+    
+    if (validLevels.includes(urgency)) {
+      updateEmergencyData(senderId, { 
+        urgencyLevel: urgency.charAt(0).toUpperCase() + urgency.slice(1) 
+      });
+      setState(senderId, "awaiting_location");
+      await sendTypingIndicator(senderId, false);
+      return askForLocation(senderId);
+    } else {
+      await sendTypingIndicator(senderId, false);
+      return sendUrgencyLevelOptions(senderId);
+    }
+  }
+
+  // STATE: Awaiting location (text address)
+  if (currentState.state === "awaiting_location") {
+    updateEmergencyData(senderId, { location: text });
+    setState(senderId, "awaiting_verification_doc");
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
       text: `📍 **Location Received!**\n` +
-            `Latitude: ${loc.coordinates.lat}\n` +
-            `Longitude: ${loc.coordinates.long}\n\n` +
-            `🚨 Help Type: ${helpType.toUpperCase()}\n` +
-            `✅ Emergency response team has been notified!\n` +
-            `⏱️ Expected arrival: 15-30 minutes\n\n` +
-            `Stay safe. Help is on the way!`
+            `Address: ${text}\n\n` +
+            `📄 **Verification Document** (Optional)\n` +
+            `Please upload any document that verifies your emergency situation (image).\n\n` +
+            `Or type **SKIP** to continue without a document.`
     });
   }
 
-  // ---- Image received ----
-  if (msg.attachments && msg.attachments.length > 0 && msg.attachments[0]?.type === "image") {
-    await sendTypingIndicator(senderId, false);
-    return callSendAPI(senderId, {
-      text: `📷 **Image received!** Thank you for the visual information.\n\n` +
-            `This will help our response team assess the situation better.\n` +
-            `Type **HELP** if you need immediate emergency assistance. 🆘`
-    });
+  // STATE: Awaiting verification document
+  if (currentState.state === "awaiting_verification_doc") {
+    if (text.toLowerCase() === "skip") {
+      setState(senderId, "awaiting_additional_info");
+      await sendTypingIndicator(senderId, false);
+      return callSendAPI(senderId, {
+        text: `⏭️ **Skipped verification document**\n\n` +
+              `📝 **Additional Information** (Optional)\n` +
+              `Please share any special needs, medical conditions, accessibility requirements, etc.\n\n` +
+              `Or type **DONE** to submit your request.`
+      });
+    } else {
+      await sendTypingIndicator(senderId, false);
+      return callSendAPI(senderId, {
+        text: `Please upload an image as verification, or type **SKIP** to continue.`
+      });
+    }
   }
 
-  const text = msg.text?.toLowerCase().trim() || "";
-
-  // User asks for help
-  if (text.includes("help") || text.includes("sos") || text.includes("emergency") || text.includes("911")) {
-    setState(senderId, "help_select");
-    await sendTypingIndicator(senderId, false);
-    return sendHelpOptions(senderId);
-  }
-
-  // Expecting help category
-  const currentState = getState(senderId);
-  if (currentState && currentState.state === "help_select") {
-    setState(senderId, "awaiting_location", text);
-    await sendTypingIndicator(senderId, false);
-    return askForLocation(senderId, text);
-  }
-
-  // Awaiting location but got text (user typed address)
-  if (currentState && currentState.state === "awaiting_location") {
-    const helpType = currentState?.helpType || "general";
-    clearState(senderId);
+  // STATE: Awaiting additional info
+  if (currentState.state === "awaiting_additional_info") {
+    if (text.toLowerCase() === "skip" || text.toLowerCase() === "done") {
+      // Submit the request
+      await submitEmergencyRequest(senderId);
+      return;
+    }
     
+    updateEmergencyData(senderId, { additionalInfo: text });
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
-      text: `📍 **Address Received!**\n` +
-            `Location: ${msg.text}\n\n` +
-            `🚨 Help Type: ${helpType.toUpperCase()}\n` +
-            `✅ Emergency response team has been notified!\n` +
-            `⏱️ Expected arrival: 15-30 minutes\n\n` +
-            `Stay safe. Help is on the way!`
-    });
-  }
-
-  // Greetings
-  if (text.includes("hi") || text.includes("hello") || text.includes("hey") || text.includes("start")) {
-    await sendTypingIndicator(senderId, false);
-    return callSendAPI(senderId, { 
-      text: `👋 **Welcome to AidVocate!**\n\n` +
-            `I'm your disaster assistance bot, here to help during emergencies.\n\n` +
-            `🆘 Type **HELP** anytime you need assistance.\n` +
-            `📍 I can help you:\n` +
-            `• Request medical aid\n` +
-            `• Contact fire & rescue\n` +
-            `• Find shelter\n` +
-            `• Get relief goods\n\n` +
-            `Stay safe! 🙏`
-    });
-  }
-
-  // Status check
-  if (text.includes("status") || text.includes("info")) {
-    await sendTypingIndicator(senderId, false);
-    return callSendAPI(senderId, {
-      text: `ℹ️ **AidVocate Status**\n` +
-            `Service: Online ✅\n` +
-            `Response Time: < 5 min\n\n` +
-            `Type **HELP** for emergency assistance.`
-    });
-  }
-
-  // Cancel/Reset
-  if (text.includes("cancel") || text.includes("reset") || text.includes("stop")) {
-    clearState(senderId);
-    await sendTypingIndicator(senderId, false);
-    return callSendAPI(senderId, {
-      text: `🔄 Session reset.\nType **HELP** when you need assistance.`
+      text: `✅ **Additional information received!**\n\n` +
+            `Type **DONE** to submit your emergency request.`
     });
   }
 
   // Default fallback
   await sendTypingIndicator(senderId, false);
   return callSendAPI(senderId, {
-    text: `You said: "${msg.text}"\n\n` +
-          `I'm here to help during emergencies! 🚨\n` +
-          `Type **HELP** to request assistance.`
+    text: `I didn't understand that. Type **HELP** to start a new emergency request.`
   });
 }
 
-// ===== Quick Response Buttons =====
-function sendHelpOptions(senderId: string) {
+// ===== Quick Reply Options =====
+function sendAssistanceTypeOptions(senderId: string) {
   return callSendAPI(senderId, {
-    text: "🚨 **What type of emergency assistance do you need?**\n\nPlease select:",
+    text: "🆘 **What type of assistance do you need?**\n\nPlease select:",
     quick_replies: [
-      { content_type: "text", title: "🆘 Medical Emergency", payload: "MEDICAL" },
-      { content_type: "text", title: "🔥 Fire & Rescue", payload: "RESCUE" },
+      { content_type: "text", title: "🍚 Food", payload: "FOOD" },
+      { content_type: "text", title: "💧 Water", payload: "WATER" },
+      { content_type: "text", title: "🏥 Medical", payload: "MEDICAL" },
       { content_type: "text", title: "🏠 Shelter", payload: "SHELTER" },
-      { content_type: "text", title: "🍚 Relief Goods", payload: "RELIEF" }
+      { content_type: "text", title: "👕 Clothing", payload: "CLOTHING" },
+      { content_type: "text", title: "📦 Other", payload: "OTHER" }
     ]
   });
 }
 
-function askForLocation(senderId: string, helpType?: string) {
-  const helpText = helpType ? ` for **${helpType.toUpperCase()}** assistance` : "";
-  
-  // Method 1: Instructions for manual location sharing
+function sendUrgencyLevelOptions(senderId: string) {
+  return callSendAPI(senderId, {
+    text: "⚠️ **What is the urgency level?**\n\nPlease select:",
+    quick_replies: [
+      { content_type: "text", title: "🟢 Low", payload: "LOW" },
+      { content_type: "text", title: "🟡 Medium", payload: "MEDIUM" },
+      { content_type: "text", title: "🟠 High", payload: "HIGH" },
+      { content_type: "text", title: "🔴 Critical", payload: "CRITICAL" }
+    ]
+  });
+}
+
+function askForLocation(senderId: string) {
   return callSendAPI(senderId, {
     text: `📍 **Share Your Location**\n\n` +
-          `To dispatch emergency help${helpText}, please:\n\n` +
+          `Please provide your location:\n\n` +
           `1️⃣ Tap the "+" button in Messenger\n` +
           `2️⃣ Select "Location" 📍\n` +
           `3️⃣ Send your current location\n\n` +
-          `🔒 Your location is only used for emergency response.\n\n` +
-          `💡 Or simply type your address if you can't share location.`
+          `💡 Or simply type your full address.`
+  });
+}
+
+// ===== Submit Emergency Request =====
+async function submitEmergencyRequest(senderId: string) {
+  const state = getState(senderId);
+  if (!state) return;
+
+  const data = state.emergencyData;
+  
+  await sendTypingIndicator(senderId, true);
+
+  // Log the complete request (in production, save to database)
+  console.log("📋 EMERGENCY REQUEST SUBMITTED:");
+  console.log(JSON.stringify(data, null, 2));
+
+  // Clear user state
+  clearState(senderId);
+
+  await sendTypingIndicator(senderId, false);
+
+  // Send confirmation
+  return callSendAPI(senderId, {
+    text: `✅ **EMERGENCY REQUEST SUBMITTED**\n\n` +
+          `**Summary:**\n` +
+          `• Assistance Needed: ${data.requiredAssistance || 'N/A'}\n` +
+          `• Contact: ${data.contactName || 'N/A'}\n` +
+          `• Phone: ${data.contactNumber || 'N/A'}\n` +
+          `• People: ${data.numberOfPeople || 'N/A'}\n` +
+          `• Urgency: ${data.urgencyLevel || 'N/A'}\n` +
+          `• Location: ${data.location || 'N/A'}\n\n` +
+          `🚨 **Emergency response team has been notified!**\n` +
+          `⏱️ Expected response: 15-30 minutes\n\n` +
+          `Stay safe! Help is on the way! 🙏\n\n` +
+          `Type **HELP** to submit another request.`
   });
 }
 
@@ -341,9 +548,9 @@ async function handlePostback(senderId: string, postback: Postback) {
   if (postback.payload === "GET_STARTED") {
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
-      text: `👋 **Welcome to AidVocate!**\n\n` +
+      text: `👋 **Welcome to AidVocate Emergency Relief!**\n\n` +
             `Your trusted disaster assistance companion.\n\n` +
-            `🆘 Type **HELP** anytime you need emergency assistance.\n\n` +
+            `🆘 Type **HELP** to submit an emergency request.\n\n` +
             `We're here 24/7 to help you stay safe! 🙏`
     });
   }
@@ -400,12 +607,11 @@ async function callSendAPI(senderId: string, response: MessageResponse): Promise
       throw new Error(`Facebook API returned ${res.status}`);
     }
 
-    // Success
     const data = await res.json();
     console.log(`✅ Message sent to ${senderId}`);
   } catch (error) {
     console.error("❌ Failed to send message:", error);
-    throw error; // Re-throw for error handling in caller
+    throw error;
   }
 }
 
@@ -424,13 +630,13 @@ process.on('SIGINT', () => {
 
 // ===== Start Server =====
 app.listen(PORT, () => {
-  console.log(`\n${"=".repeat(50)}`);
-  console.log(`✅ AidVocate Messenger Bot is RUNNING`);
-  console.log(`${"=".repeat(50)}`);
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`✅ AidVocate Emergency Relief Bot is RUNNING`);
+  console.log(`${"=".repeat(60)}`);
   console.log(`📡 Port: ${PORT}`);
   console.log(`🔗 Webhook URL: https://YOUR-DOMAIN.com/webhook`);
   console.log(`🔑 Verify Token: ${VERIFY_TOKEN}`);
   console.log(`⏰ State cleanup: Every ${CLEANUP_INTERVAL_MS / 1000}s`);
   console.log(`⏱️  State timeout: ${STATE_TIMEOUT_MS / 1000}s`);
-  console.log(`${"=".repeat(50)}\n`);
+  console.log(`${"=".repeat(60)}\n`);
 });
