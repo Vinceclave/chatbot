@@ -325,17 +325,18 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
 
   // STATE: Awaiting required assistance type
   if (currentState.state === "awaiting_assistance_type") {
-    const assistanceType = text.toLowerCase();
+    // Remove emojis and extra spaces to get clean text
+    const cleanText = text.toLowerCase().replace(/[^\w\s]/gi, '').trim();
     const validTypes = ["food", "water", "medical", "shelter", "clothing", "other"];
     
-    if (validTypes.includes(assistanceType)) {
+    if (validTypes.includes(cleanText)) {
       updateEmergencyData(senderId, { 
-        requiredAssistance: assistanceType.charAt(0).toUpperCase() + assistanceType.slice(1) 
+        requiredAssistance: cleanText.charAt(0).toUpperCase() + cleanText.slice(1) 
       });
       setState(senderId, "awaiting_contact_name");
       await sendTypingIndicator(senderId, false);
       return callSendAPI(senderId, {
-        text: `✅ Required Assistance: **${assistanceType.toUpperCase()}**\n\n` +
+        text: `✅ Required Assistance: **${cleanText.toUpperCase()}**\n\n` +
               `👤 **Contact Name**\n` +
               `Please provide your full name:`
       });
@@ -396,12 +397,13 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
 
   // STATE: Awaiting urgency level
   if (currentState.state === "awaiting_urgency_level") {
-    const urgency = text.toLowerCase();
+    // Remove emojis and extra spaces to get clean text
+    const cleanText = text.toLowerCase().replace(/[^\w\s]/gi, '').trim();
     const validLevels = ["low", "medium", "high", "critical"];
     
-    if (validLevels.includes(urgency)) {
+    if (validLevels.includes(cleanText)) {
       updateEmergencyData(senderId, { 
-        urgencyLevel: urgency.charAt(0).toUpperCase() + urgency.slice(1) 
+        urgencyLevel: cleanText.charAt(0).toUpperCase() + cleanText.slice(1) 
       });
       setState(senderId, "awaiting_location");
       await sendTypingIndicator(senderId, false);
