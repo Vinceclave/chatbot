@@ -36,26 +36,28 @@ app.get('/webhook', (req: Request<{}, {}, {}, any>, res: Response) => {
 
 app.post('/webhook', async (req: Request<{}, {}, any>, res: Response) => {
   const body = req.body;
+
   if (body.object === 'page') {
     for (const entry of body.entry) {
       for (const event of entry.messaging) {
         const senderId = event.sender?.id;
         if (!senderId) continue;
 
+        // Handle location attachment
         if (event.message?.attachments?.length) {
           const attachment = event.message.attachments[0];
           if (attachment.type === "location") {
-            const loc = attachment.payload;
+            const loc = attachment.payload.coordinates;
             await callSendAPI(senderId, {
-              text: `📍 Location received!\nLatitude: ${loc.coordinates.lat}\nLongitude: ${loc.coordinates.long}`
+              text: `📍 Location received!\nLatitude: ${loc.lat}\nLongitude: ${loc.long}`
             });
-            console.log(`✅ Location from ${senderId}:`, loc.coordinates);
+            console.log(`User ${senderId} location:`, loc);
+            continue;
           }
-        } else {
-          await callSendAPI(senderId, {
-            text: "📍 Please share your location using the Messenger location button."
-          });
         }
+
+        // Ask user to share location if they send any other message
+        await askForLocation(senderId);
       }
     }
     res.status(200).send("EVENT_RECEIVED");
@@ -64,16 +66,23 @@ app.post('/webhook', async (req: Request<{}, {}, any>, res: Response) => {
   }
 });
 
+// ===== ASK FOR LOCATION =====
+async function askForLocation(senderId: string) {
+  await callSendAPI(senderId, {
+    text: "📍 Please share your location:",
+    quick_replies: [
+      { content_type: "location" }, // Messenger opens location picker
+      { content_type: "text", title: "Cancel", payload: "CANCEL" }
+    ]
+  });
+}
+
 // ===== SEND TO FACEBOOK =====
-async function callSendAPI(senderId: string, response: { text: string }) {
+async function callSendAPI(senderId: string, message: { text: string; quick_replies?: any[] }) {
   try {
     await axios.post(
       `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-      {
-        recipient: { id: senderId },
-        message: response,
-        messaging_type: "RESPONSE"
-      }
+      { recipient: { id: senderId }, message, messaging_type: "RESPONSE" }
     );
   } catch (error: any) {
     console.error("❌ Failed to send:", error.response?.data || error.message);
