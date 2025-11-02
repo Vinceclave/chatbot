@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import bodyParser from 'body-parser';
+import fetch from 'node-fetch'; // Make sure node-fetch is installed
 
 const app = express();
 app.use(bodyParser.json());
@@ -78,31 +79,21 @@ interface SendAPIBody {
 
 // ===== Emergency Request Data Structure =====
 interface EmergencyRequest {
-  // Location
   location?: string;
   locationCoords?: { lat: number; long: number };
-  
-  // Contact Information
   contactName?: string;
   contactNumber?: string;
-  
-  // Emergency Details
-  requiredAssistance?: string[]; // Array: Food, Water, Medical, Shelter, Clothing, Other
+  requiredAssistance?: string[];
   numberOfPeople?: number;
-  urgencyLevel?: string; // Low, Medium, High, Critical
-  
-  // Verification
-  verificationDoc?: string; // Image URL
-  
-  // Additional Information
+  urgencyLevel?: string;
+  verificationDoc?: string;
   additionalInfo?: string;
-  
   timestamp: number;
   submittedAt?: number;
 }
 
 interface UserState {
-  state: 
+  state:
     | "start"
     | "awaiting_assistance_type"
     | "awaiting_more_assistance"
@@ -124,19 +115,18 @@ const userState: Record<string, UserState> = {};
 function cleanupOldStates() {
   const now = Date.now();
   let cleaned = 0;
-  
+
   Object.keys(userState).forEach(userId => {
     if (now - userState[userId].timestamp > STATE_TIMEOUT_MS) {
       delete userState[userId];
       cleaned++;
     }
   });
-  
+
   if (cleaned > 0) {
     console.log(`🧹 Cleaned up ${cleaned} expired user state(s)`);
   }
 }
-
 setInterval(cleanupOldStates, CLEANUP_INTERVAL_MS);
 
 // ===== Helper Functions =====
@@ -181,8 +171,6 @@ function addAssistanceType(senderId: string, type: string) {
 }
 
 // ===== Routes =====
-
-// Health check
 app.get('/', (req, res) => {
   res.json({
     status: "ok",
@@ -207,31 +195,20 @@ app.get('/webhook', (req: Request<{}, {}, {}, WebhookQuery>, res: Response) => {
   }
 });
 
-// Messenger event receiver
+// Messenger webhook receiver
 app.post('/webhook', async (req: Request<{}, {}, WebhookBody>, res: Response) => {
   const body = req.body;
 
   if (body.object === 'page') {
     for (const entry of body.entry) {
-      if (!entry.messaging || entry.messaging.length === 0) {
-        console.warn("⚠️ Empty messaging array in entry");
-        continue;
-      }
-
+      if (!entry.messaging || entry.messaging.length === 0) continue;
       for (const event of entry.messaging) {
         const senderId = event.sender?.id;
-        
-        if (!senderId) {
-          console.warn("⚠️ Event missing sender ID");
-          continue;
-        }
+        if (!senderId) continue;
 
         try {
-          if (event.message) {
-            await handleMessage(senderId, event.message);
-          } else if (event.postback) {
-            await handlePostback(senderId, event.postback);
-          }
+          if (event.message) await handleMessage(senderId, event.message);
+          else if (event.postback) await handlePostback(senderId, event.postback);
         } catch (error) {
           console.error(`❌ Error processing event for user ${senderId}:`, error);
           await callSendAPI(senderId, {
@@ -240,7 +217,6 @@ app.post('/webhook', async (req: Request<{}, {}, WebhookBody>, res: Response) =>
         }
       }
     }
-
     res.status(200).send('EVENT_RECEIVED');
   } else {
     res.sendStatus(404);
@@ -259,109 +235,72 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
 
   console.log(`📨 Message from ${senderId}: text="${text}", payload="${quickReplyPayload}", state="${currentState?.state}"`);
 
-  // ===== HANDLE ATTACHMENTS =====
-  
-  // Location attachment
+  // ===== Handle Attachments =====
   if (msg.attachments && msg.attachments.length > 0) {
     const attachment = msg.attachments[0];
-    
+
+    // Location
     if (attachment.type === "location") {
       const loc = attachment.payload as LocationPayload;
       updateEmergencyData(senderId, {
         locationCoords: { lat: loc.coordinates.lat, long: loc.coordinates.long },
         location: `${loc.coordinates.lat}, ${loc.coordinates.long}`
       });
-      
       setState(senderId, "awaiting_verification_doc");
       await sendTypingIndicator(senderId, false);
       return callSendAPI(senderId, {
-        text: `📍 Location Received!\n` +
-              `Latitude: ${loc.coordinates.lat}\n` +
-              `Longitude: ${loc.coordinates.long}\n\n` +
-              `📄 Verification Document (Optional)\n` +
-              `Please upload any document that verifies your emergency situation (image).\n\n` +
-              `Or type SKIP to continue without a document.`
+        text: `📍 Location Received!\nLatitude: ${loc.coordinates.lat}\nLongitude: ${loc.coordinates.long}\n\n📄 Verification Document (Optional)\nPlease upload any document verifying your emergency (image) or type SKIP to continue.`
       });
     }
-    
-    // Image attachment (for verification)
+
+    // Image (Verification Document)
     if (attachment.type === "image") {
       if (currentState?.state === "awaiting_verification_doc") {
         const imageUrl = attachment.payload?.url || "Image received";
         updateEmergencyData(senderId, { verificationDoc: imageUrl });
-        
         setState(senderId, "awaiting_additional_info");
         await sendTypingIndicator(senderId, false);
         return callSendAPI(senderId, {
-          text: `✅ Verification document received!\n\n` +
-                `📝 Additional Information (Optional)\n` +
-                `Please share any special needs, medical conditions, accessibility requirements, etc.\n\n` +
-                `Or type SKIP to submit your request.`
+          text: `✅ Verification document received!\n\n📝 Additional Information (Optional)\nPlease share special needs, medical conditions, etc., or type SKIP to submit.`
         });
       } else {
         await sendTypingIndicator(senderId, false);
-        return callSendAPI(senderId, {
-          text: `📷 Image received! Type HELP to start an emergency request.`
-        });
+        return callSendAPI(senderId, { text: `📷 Image received! Type HELP to start a new emergency request.` });
       }
     }
   }
 
-  // ===== COMMAND HANDLERS =====
-  
-  // Help/Emergency command
-  if (text.toLowerCase().includes("help") || 
-      text.toLowerCase().includes("sos") || 
-      text.toLowerCase().includes("emergency") || 
-      text.toLowerCase().includes("start")) {
+  // ===== Command Handlers =====
+  if (text.toLowerCase().includes("help") || text.toLowerCase().includes("sos") || text.toLowerCase().includes("emergency") || text.toLowerCase().includes("start")) {
     setState(senderId, "awaiting_assistance_type");
     await sendTypingIndicator(senderId, false);
     return sendAssistanceTypeOptions(senderId);
   }
 
-  // Cancel command
   if (text.toLowerCase().includes("cancel") || text.toLowerCase().includes("reset")) {
     clearState(senderId);
     await sendTypingIndicator(senderId, false);
-    return callSendAPI(senderId, {
-      text: `🔄 Request cancelled. Type HELP when you need assistance.`
-    });
+    return callSendAPI(senderId, { text: `🔄 Request cancelled. Type HELP when you need assistance.` });
   }
 
-  // ===== STATE-BASED CONVERSATION FLOW =====
-
+  // ===== State-based Conversation Flow =====
   if (!currentState) {
-    // No active request - show welcome
     await sendTypingIndicator(senderId, false);
     return callSendAPI(senderId, {
-      text: `👋 Welcome to AidVocate Emergency Bot\n\n` +
-            `I help you submit emergency assistance requests.\n\n` +
-            `🆘 Type HELP to start a new request.\n\n` +
-            `We're here 24/7 to assist you! 🙏`
+      text: `👋 Welcome to AidVocate Emergency Bot\n\nType HELP to start a new emergency request. We're here 24/7! 🙏`
     });
   }
 
-  // STATE: Awaiting required assistance type
+  // STATE: Awaiting Assistance Type
   if (currentState.state === "awaiting_assistance_type") {
-    const cleanText = text.toLowerCase().replace(/[^\w\s]/gi, '').trim();
+    const cleanText = text.toUpperCase();
     const payload = quickReplyPayload?.toUpperCase();
     const validTypes = ["FOOD", "WATER", "MEDICAL", "SHELTER", "CLOTHING", "OTHER"];
-    
-    let selectedType = null;
-    
-    // Check quick reply payload first
-    if (payload && validTypes.includes(payload)) {
-      selectedType = payload;
-    } 
-    // Then check text input
-    else if (validTypes.includes(cleanText.toUpperCase())) {
-      selectedType = cleanText.toUpperCase();
-    }
-    
+    let selectedType = validTypes.includes(payload || "") ? payload : validTypes.includes(cleanText) ? cleanText : null;
+
     if (selectedType) {
-      const capitalizedType = selectedType.charAt(0).toUpperCase() + selectedType.slice(1).toLowerCase();
+      const capitalizedType = selectedType.charAt(0) + selectedType.slice(1).toLowerCase();
       addAssistanceType(senderId, capitalizedType);
-      
       setState(senderId, "awaiting_more_assistance");
       await sendTypingIndicator(senderId, false);
       return askForMoreAssistance(senderId);
@@ -371,401 +310,186 @@ async function handleMessage(senderId: string, msg: MessagingEvent['message']) {
     }
   }
 
-  // STATE: Awaiting more assistance (YES/NO)
-  // THIS IS THE KEY FIX - Check quick_reply payload first!
+  // STATE: Awaiting More Assistance (YES/NO)
   if (currentState.state === "awaiting_more_assistance") {
-    const cleanText = text.toLowerCase().trim();
-    const payload = quickReplyPayload?.toUpperCase();
-    
-    console.log(`🔍 More assistance check: text="${cleanText}", payload="${payload}"`);
-    
-    // Check payload first (from quick reply buttons)
-    if (payload === "YES" || cleanText === "yes" || cleanText === "y") {
+    if (text.toLowerCase() === "yes") {
       setState(senderId, "awaiting_assistance_type");
       await sendTypingIndicator(senderId, false);
-      return sendAssistanceTypeOptions(senderId, true);
-    } else if (payload === "NO" || cleanText === "no" || cleanText === "n") {
+      return sendAssistanceTypeOptions(senderId);
+    } else {
       setState(senderId, "awaiting_contact_name");
       await sendTypingIndicator(senderId, false);
-      const assistanceList = currentState.emergencyData.requiredAssistance || [];
-      return callSendAPI(senderId, {
-        text: `✅ Selected Assistance: ${assistanceList.join(", ")}\n\n` +
-              `👤 Contact Name\n` +
-              `Please provide your full name:`
-      });
+      return callSendAPI(senderId, { text: "👤 Please provide a contact name for this request:" });
+    }
+  }
+
+  // STATE: Awaiting Contact Name
+  if (currentState.state === "awaiting_contact_name") {
+    if (text.length >= 2) {
+      updateEmergencyData(senderId, { contactName: text });
+      setState(senderId, "awaiting_contact_number");
+      await sendTypingIndicator(senderId, false);
+      return callSendAPI(senderId, { text: "📞 Now, please provide the contact number:" });
     } else {
       await sendTypingIndicator(senderId, false);
-      return askForMoreAssistance(senderId);
+      return callSendAPI(senderId, { text: "⚠️ Please provide a valid name." });
     }
   }
 
-  // STATE: Awaiting contact name
-  if (currentState.state === "awaiting_contact_name") {
-    updateEmergencyData(senderId, { contactName: text });
-    setState(senderId, "awaiting_contact_number");
-    await sendTypingIndicator(senderId, false);
-    return callSendAPI(senderId, {
-      text: `✅ Name: ${text}\n\n` +
-            `📱 Contact Number\n` +
-            `Please provide your phone number:`
-    });
-  }
-
-  // STATE: Awaiting contact number
+  // STATE: Awaiting Contact Number
   if (currentState.state === "awaiting_contact_number") {
-    // Basic phone validation
-    const phoneRegex = /^[0-9+\-\s()]{7,}$/;
-    if (!phoneRegex.test(text)) {
+    if (/^\+?\d{7,15}$/.test(text.replace(/ /g, ""))) {
+      updateEmergencyData(senderId, { contactNumber: text });
+      setState(senderId, "awaiting_number_of_people");
       await sendTypingIndicator(senderId, false);
-      return callSendAPI(senderId, {
-        text: `⚠️ Invalid phone number format.\n\nPlease enter a valid phone number (e.g., 09171234567):`
-      });
+      return callSendAPI(senderId, { text: "👥 How many people need assistance?" });
+    } else {
+      await sendTypingIndicator(senderId, false);
+      return callSendAPI(senderId, { text: "⚠️ Please provide a valid phone number (digits only, may include +)." });
     }
-    
-    updateEmergencyData(senderId, { contactNumber: text });
-    setState(senderId, "awaiting_number_of_people");
-    await sendTypingIndicator(senderId, false);
-    return callSendAPI(senderId, {
-      text: `✅ Contact Number: ${text}\n\n` +
-            `👥 Number of People\n` +
-            `How many people need assistance? (Enter a number):`
-    });
   }
 
-  // STATE: Awaiting number of people
+  // STATE: Awaiting Number of People
   if (currentState.state === "awaiting_number_of_people") {
     const num = parseInt(text);
-    if (isNaN(num) || num < 1 || num > 10000) {
+    if (!isNaN(num) && num > 0) {
+      updateEmergencyData(senderId, { numberOfPeople: num });
+      setState(senderId, "awaiting_urgency_level");
       await sendTypingIndicator(senderId, false);
-      return callSendAPI(senderId, {
-        text: `⚠️ Please enter a valid number (1-10000):`
-      });
+      return askForUrgencyLevel(senderId);
+    } else {
+      await sendTypingIndicator(senderId, false);
+      return callSendAPI(senderId, { text: "⚠️ Please enter a valid number of people." });
     }
-    
-    updateEmergencyData(senderId, { numberOfPeople: num });
-    setState(senderId, "awaiting_urgency_level");
-    await sendTypingIndicator(senderId, false);
-    return sendUrgencyLevelOptions(senderId);
   }
 
-  // STATE: Awaiting urgency level
+  // STATE: Awaiting Urgency Level
   if (currentState.state === "awaiting_urgency_level") {
-    const cleanText = text.toLowerCase().replace(/[^\w\s]/gi, '').trim();
-    const payload = quickReplyPayload?.toUpperCase();
-    const validLevels = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
-    
-    let selectedLevel = null;
-    
-    if (payload && validLevels.includes(payload)) {
-      selectedLevel = payload;
-    } else if (validLevels.includes(cleanText.toUpperCase())) {
-      selectedLevel = cleanText.toUpperCase();
-    }
-    
-    if (selectedLevel) {
-      updateEmergencyData(senderId, { 
-        urgencyLevel: selectedLevel.charAt(0).toUpperCase() + selectedLevel.slice(1).toLowerCase()
-      });
+    const levels = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+    if (levels.includes(text.toUpperCase())) {
+      updateEmergencyData(senderId, { urgencyLevel: text.toUpperCase() });
       setState(senderId, "awaiting_location");
       await sendTypingIndicator(senderId, false);
       return askForLocation(senderId);
     } else {
       await sendTypingIndicator(senderId, false);
-      return sendUrgencyLevelOptions(senderId);
+      return askForUrgencyLevel(senderId);
     }
   }
 
-  // STATE: Awaiting location (text address)
-  if (currentState.state === "awaiting_location") {
-    updateEmergencyData(senderId, { location: text });
-    setState(senderId, "awaiting_verification_doc");
-    await sendTypingIndicator(senderId, false);
-    return callSendAPI(senderId, {
-      text: `📍 Location Received!\n` +
-            `Address: ${text}\n\n` +
-            `📄 Verification Document (Optional)\n` +
-            `Please upload any document that verifies your emergency situation (image).\n\n` +
-            `Or type SKIP to continue without a document.`
-    });
-  }
-
-  // STATE: Awaiting verification document
-  if (currentState.state === "awaiting_verification_doc") {
-    if (text.toLowerCase() === "skip") {
-      setState(senderId, "awaiting_additional_info");
-      await sendTypingIndicator(senderId, false);
-      return callSendAPI(senderId, {
-        text: `⏭️ Skipped verification document\n\n` +
-              `📝 Additional Information (Optional)\n` +
-              `Please share any special needs, medical conditions, accessibility requirements, etc.\n\n` +
-              `Or type DONE to submit your request.`
-      });
-    } else {
-      await sendTypingIndicator(senderId, false);
-      return callSendAPI(senderId, {
-        text: `Please upload an image as verification, or type SKIP to continue.`
-      });
-    }
-  }
-
-  // STATE: Awaiting additional info
+  // STATE: Awaiting Additional Info
   if (currentState.state === "awaiting_additional_info") {
-    if (text.toLowerCase() === "skip" || text.toLowerCase() === "done") {
-      // Submit the request
-      await submitEmergencyRequest(senderId);
-      return;
+    if (text.toLowerCase() !== "skip") {
+      updateEmergencyData(senderId, { additionalInfo: text });
     }
-    
-    updateEmergencyData(senderId, { additionalInfo: text });
+    await finalizeEmergencyRequest(senderId);
+    clearState(senderId);
     await sendTypingIndicator(senderId, false);
-    return callSendAPI(senderId, {
-      text: `✅ Additional information received!\n\n` +
-            `Type DONE to submit your emergency request.`
-    });
+    return callSendAPI(senderId, { text: "✅ Your emergency request has been submitted! Help is on the way." });
   }
 
-  // Default fallback
+  // Fallback
   await sendTypingIndicator(senderId, false);
-  return callSendAPI(senderId, {
-    text: `I didn't understand that. Type HELP to start a new emergency request.`
-  });
+  return callSendAPI(senderId, { text: `⚠️ I didn't understand that. Type HELP to start a new emergency request.` });
 }
 
-// ===== Quick Reply Options =====
-function sendAssistanceTypeOptions(senderId: string, isAdditional: boolean = false) {
-  const currentState = getState(senderId);
-  const selectedTypes = currentState?.emergencyData.requiredAssistance || [];
-  
-  let headerText = "🆘 What type of assistance do you need?\n\n";
-  if (isAdditional && selectedTypes.length > 0) {
-    headerText = `✅ Currently selected: ${selectedTypes.join(", ")}\n\n` +
-                 `🆘 What additional assistance do you need?\n\n`;
+// ===== Postback Handler =====
+async function handlePostback(senderId: string, postback: Postback) {
+  if (postback.payload === "GET_STARTED") {
+    setState(senderId, "start");
+    return callSendAPI(senderId, { text: `👋 Welcome to AidVocate Emergency Bot!\n\nType HELP to start a new emergency request.` });
   }
-  
+}
+
+// ===== UI / Messages =====
+function sendAssistanceTypeOptions(senderId: string) {
+  const quickReplies = [
+    { content_type: "text", title: "Food", payload: "FOOD" },
+    { content_type: "text", title: "Water", payload: "WATER" },
+    { content_type: "text", title: "Medical", payload: "MEDICAL" },
+    { content_type: "text", title: "Shelter", payload: "SHELTER" },
+    { content_type: "text", title: "Clothing", payload: "CLOTHING" },
+    { content_type: "text", title: "Other", payload: "OTHER" }
+  ];
+
   return callSendAPI(senderId, {
-    text: headerText + "Please select:",
-    quick_replies: [
-      { content_type: "text", title: "🍚 Food", payload: "FOOD" },
-      { content_type: "text", title: "💧 Water", payload: "WATER" },
-      { content_type: "text", title: "🏥 Medical", payload: "MEDICAL" },
-      { content_type: "text", title: "🏠 Shelter", payload: "SHELTER" },
-      { content_type: "text", title: "👕 Clothing", payload: "CLOTHING" },
-      { content_type: "text", title: "📦 Other", payload: "OTHER" }
-    ]
+    text: "🆘 What type of assistance do you need?",
+    quick_replies: quickReplies
   });
 }
 
 function askForMoreAssistance(senderId: string) {
-  const currentState = getState(senderId);
-  const selectedTypes = currentState?.emergencyData.requiredAssistance || [];
-  
   return callSendAPI(senderId, {
-    text: `✅ Added: ${selectedTypes[selectedTypes.length - 1]}\n\n` +
-          `Current selections: ${selectedTypes.join(", ")}\n\n` +
-          `❓ Do you need any other type of assistance?`,
-    quick_replies: [
-      { content_type: "text", title: "✅ Yes", payload: "YES" },
-      { content_type: "text", title: "❌ No", payload: "NO" }
-    ]
+    text: "Do you need to request another type of assistance? (Yes/No)"
   });
 }
 
-function sendUrgencyLevelOptions(senderId: string) {
+function askForUrgencyLevel(senderId: string) {
+  const quickReplies = [
+    { content_type: "text", title: "Low", payload: "LOW" },
+    { content_type: "text", title: "Medium", payload: "MEDIUM" },
+    { content_type: "text", title: "High", payload: "HIGH" },
+    { content_type: "text", title: "Critical", payload: "CRITICAL" }
+  ];
   return callSendAPI(senderId, {
-    text: "⚠️ What is the urgency level?\n\nPlease select:",
-    quick_replies: [
-      { content_type: "text", title: "🟢 Low", payload: "LOW" },
-      { content_type: "text", title: "🟡 Medium", payload: "MEDIUM" },
-      { content_type: "text", title: "🟠 High", payload: "HIGH" },
-      { content_type: "text", title: "🔴 Critical", payload: "CRITICAL" }
-    ]
+    text: "⚡ Please select the urgency level:",
+    quick_replies: quickReplies
   });
 }
 
 function askForLocation(senderId: string) {
-  // Use a button template with location sharing
   return callSendAPI(senderId, {
-    attachment: {
-      type: "template",
-      payload: {
-        template_type: "generic",
-        elements: [{
-          title: "📍 Share Your Location",
-          subtitle: "Tap the button below to share your current location, or simply type your address.",
-          buttons: [
-            {
-              type: "element_share"
-            }
-          ]
-        }]
-      }
-    }
+    text: "📍 Please share your location or type your address:",
+    quick_replies: [{ content_type: "location" }]
   });
 }
 
-// ===== Submit Emergency Request =====
-async function submitEmergencyRequest(senderId: string) {
-  const state = getState(senderId);
-  if (!state) return;
+async function finalizeEmergencyRequest(senderId: string) {
+  const data = getState(senderId)?.emergencyData;
+  if (!data) return;
 
-  const data = state.emergencyData;
-  data.submittedAt = Date.now();
-  
-  await sendTypingIndicator(senderId, true);
-
-  // ===== LOG THE COMPLETE REQUEST =====
-  console.log("\n" + "=".repeat(80));
-  console.log("📋 EMERGENCY REQUEST SUBMITTED");
-  console.log("=".repeat(80));
-  console.log("🆔 User ID:", senderId);
-  console.log("⏰ Timestamp:", new Date(data.submittedAt).toISOString());
-  console.log("-".repeat(80));
-  console.log("📦 ASSISTANCE REQUIRED:");
-  console.log("   Types:", data.requiredAssistance?.join(", ") || 'None specified');
-  console.log("-".repeat(80));
-  console.log("👤 CONTACT INFORMATION:");
-  console.log("   Name:", data.contactName || 'N/A');
-  console.log("   Phone:", data.contactNumber || 'N/A');
-  console.log("-".repeat(80));
-  console.log("🚨 EMERGENCY DETAILS:");
-  console.log("   Number of People:", data.numberOfPeople || 'N/A');
-  console.log("   Urgency Level:", data.urgencyLevel || 'N/A');
-  console.log("-".repeat(80));
-  console.log("📍 LOCATION:");
-  console.log("   Address:", data.location || 'N/A');
-  if (data.locationCoords) {
-    console.log("   Coordinates:", `${data.locationCoords.lat}, ${data.locationCoords.long}`);
-    console.log("   Google Maps:", `https://www.google.com/maps?q=${data.locationCoords.lat},${data.locationCoords.long}`);
-  }
-  console.log("-".repeat(80));
-  console.log("📄 VERIFICATION:");
-  console.log("   Document:", data.verificationDoc || 'Not provided');
-  console.log("-".repeat(80));
-  console.log("📝 ADDITIONAL INFO:");
-  console.log("   Details:", data.additionalInfo || 'None provided');
-  console.log("-".repeat(80));
-  console.log("🔗 FULL DATA (JSON):");
-  console.log(JSON.stringify(data, null, 2));
-  console.log("=".repeat(80) + "\n");
-
-  // Clear user state
-  clearState(senderId);
-
-  await sendTypingIndicator(senderId, false);
-
-  // Send confirmation
-  return callSendAPI(senderId, {
-    text: `✅ EMERGENCY REQUEST SUBMITTED\n\n` +
-          `Summary:\n` +
-          `• Assistance: ${data.requiredAssistance?.join(", ") || 'N/A'}\n` +
-          `• Contact: ${data.contactName || 'N/A'}\n` +
-          `• Phone: ${data.contactNumber || 'N/A'}\n` +
-          `• People: ${data.numberOfPeople || 'N/A'}\n` +
-          `• Urgency: ${data.urgencyLevel || 'N/A'}\n` +
-          `• Location: ${data.location || 'N/A'}\n\n` +
-          `🚨 Emergency response team has been notified!\n` +
-          `⏱️ Expected response: 15-30 minutes\n\n` +
-          `Stay safe! Help is on the way! 🙏\n\n` +
-          `Type HELP to submit another request.`
-  });
+  console.log("📝 Emergency Request Submitted:", JSON.stringify(data, null, 2));
+  // TODO: Save to database or notify responders
 }
 
-// ===== Postbacks =====
-async function handlePostback(senderId: string, postback: Postback) {
-  await sendTypingIndicator(senderId, true);
-
-  if (postback.payload === "GET_STARTED") {
-    await sendTypingIndicator(senderId, false);
-    return callSendAPI(senderId, {
-      text: `👋 Welcome to AidVocate Emergency Bot!\n\n` +
-            `Your trusted disaster assistance companion.\n\n` +
-            `🆘 Type HELP to submit an emergency request.\n\n` +
-            `We're here 24/7 to help you stay safe! 🙏`
-    });
-  }
-
-  await sendTypingIndicator(senderId, false);
-  return callSendAPI(senderId, { 
-    text: `✅ You selected: ${postback.title || postback.payload}\n\nType HELP if you need assistance.` 
-  });
-}
-
-// ===== Typing Indicator =====
-async function sendTypingIndicator(senderId: string, isTyping: boolean) {
-  const requestBody: SendAPIBody = {
+// ===== Messenger API =====
+async function callSendAPI(senderId: string, message: MessageResponse) {
+  const body: SendAPIBody = {
     recipient: { id: senderId },
-    sender_action: isTyping ? "typing_on" : "typing_off"
-  };
-
-  try {
-    await fetch(`https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody)
-    });
-  } catch (e) {
-    // Don't log typing indicator errors (non-critical)
-  }
-}
-
-// ===== Send message to Facebook API =====
-async function callSendAPI(senderId: string, response: MessageResponse): Promise<void> {
-  const requestBody: SendAPIBody = {
-    recipient: { id: senderId },
-    message: response,
+    message,
     messaging_type: "RESPONSE"
   };
 
   try {
-    const res = await fetch(
-      `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody)
-      }
-    );
+    const res = await fetch(`https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" }
+    });
 
     if (!res.ok) {
-      const errorData = await res.json().catch(() => null);
-      console.error("❌ Facebook API Error:", {
-        status: res.status,
-        statusText: res.statusText,
-        error: errorData
-      });
-      throw new Error(`Facebook API returned ${res.status}`);
+      const text = await res.text();
+      console.error("❌ Messenger API Error:", text);
     }
-
-    const data = await res.json();
-    console.log(`✅ Message sent to ${senderId}`);
   } catch (error) {
-    console.error("❌ Failed to send message:", error);
-    throw error;
+    console.error("❌ callSendAPI error:", error);
   }
 }
 
-// ===== Graceful Shutdown =====
-process.on('SIGTERM', () => {
-  console.log('⚠️ SIGTERM received, shutting down gracefully...');
-  cleanupOldStates();
-  process.exit(0);
-});
+// Typing indicator
+async function sendTypingIndicator(senderId: string, typing: boolean) {
+  const body: SendAPIBody = {
+    recipient: { id: senderId },
+    sender_action: typing ? "typing_on" : "typing_off"
+  };
+  await fetch(`https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" }
+  }).catch(e => console.error("Typing indicator error:", e));
+}
 
-process.on('SIGINT', () => {
-  console.log('\n⚠️ SIGINT received, shutting down gracefully...');
-  cleanupOldStates();
-  process.exit(0);
-});
-
-// ===== Start Server =====
+// ===== Server Start =====
 app.listen(PORT, () => {
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`✅ AidVocate Emergency Bot is RUNNING`);
-  console.log(`${"=".repeat(60)}`);
-  console.log(`📡 Port: ${PORT}`);
-  console.log(`🔗 Webhook URL: https://YOUR-DOMAIN.com/webhook`);
-  console.log(`🔑 Verify Token: ${VERIFY_TOKEN}`);
-  console.log(`⏰ State cleanup: Every ${CLEANUP_INTERVAL_MS / 1000}s`);
-  console.log(`⏱️  State timeout: ${STATE_TIMEOUT_MS / 1000}s`);
-  console.log(`${"=".repeat(60)}\n`);
+  console.log(`🚀 AidVocate Bot running on port ${PORT}`);
 });
