@@ -9,7 +9,7 @@ const app = express();
 app.use(bodyParser.json());
 
 // ===== CONFIGURATION =====
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "aidvocate_bot_verify_token_2025";
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 
 if (!PAGE_ACCESS_TOKEN) {
@@ -100,7 +100,7 @@ const MESSAGES = {
     ],
   },
   SUBMIT_DONE: {
-    text: "✅ Success! Your missing animal report has been submitted and posted to our Facebook page.\n\n🙏 We'll do everything we can to help bring your pet home safely.\n\nThank you for using Aidvocate! 🐾❤️",
+    text: "✅ Success! Your missing animal report has been submitted and posted to our Facebook page.\n\n🙏 We'll do everything we can to help bring your pet home safely.\n\nThank you for using HanapKa! 🐾❤️",
   },
   THANKS: { text: "No problem! If you ever need to report a missing animal, just message me anytime. Stay safe! 🐾" },
   CANCEL: { text: "❌ Report cancelled. Your information has been cleared.\n\nFeel free to start over whenever you're ready!" },
@@ -558,7 +558,7 @@ async function setGetStartedButton() {
         greeting: [
           {
             locale: "default",
-            text: "🐾 Welcome to Aidvocate! I'll help you report missing animals and spread the word to help bring them home safely."
+            text: "🐾 Welcome to HanapKa! I'll help you report missing animals and spread the word to help bring them home safely."
           }
         ]
       }
@@ -572,7 +572,7 @@ async function setGetStartedButton() {
 // ===== HEALTH CHECK =====
 app.get("/", (_req, res) => res.json({ 
   status: "ok", 
-  service: "Aidvocate - Missing Animal Bot",
+  service: "HanapKa - Missing Animal Bot",
   activeUsers: userSessions.size 
 }));
 
@@ -596,7 +596,7 @@ setInterval(() => {
 // ===== START SERVER =====
 app.listen(PORT, async () => {
   console.log("=".repeat(60));
-  console.log(`🚀 Aidvocate Missing Animal Bot v2.0`);
+  console.log(`🚀 HanapKa Missing Animal Bot v2.0`);
   console.log(`🌐 Server running on port ${PORT}`);
   console.log(`🔗 Webhook endpoint: /webhook`);
   console.log(`📁 Reports folder: ${reportsDir}`);
