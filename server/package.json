@@ -4,9 +4,9 @@
   "description": "Facebook Messenger Chatbot with TypeScript",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "dev": "nodemon --watch src --ext ts,json --exec \"npx ts-node src/server.ts\"",
+    "build": "node init && tsc",
+    "start": "node init && node dist/server.js",
+    "dev": "node init && nodemon --watch src --ext ts,json --exec \"npx ts-node src/server.ts\"",
     "watch": "tsc --watch"
   },
   "dependencies": {
