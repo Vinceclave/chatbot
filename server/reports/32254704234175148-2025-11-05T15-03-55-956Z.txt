@@ -1,0 +1,28 @@
+{
+  "senderId": "32254704234175148",
+  "pets": [
+    {
+      "imageUrls": [],
+      "animalType": "Dog",
+      "animalName": "Cacus",
+      "lastSeenLocation": "house"
+    },
+    {
+      "imageUrls": [],
+      "animalType": "Dog",
+      "animalName": "Cacus",
+      "lastSeenLocation": "house"
+    }
+  ],
+  "currentPet": {
+    "imageUrls": [],
+    "animalType": "Dog",
+    "animalName": "Cacus",
+    "lastSeenLocation": "house"
+  },
+  "currentStep": "ask_more",
+  "createdAt": "2025-11-05T15:02:56.036Z",
+  "contactName": "Godark Py",
+  "contactNo": "09421312332",
+  "facebookAccount": "n/a"
+}
